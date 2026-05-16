@@ -358,15 +358,17 @@ async def show_episodes(query, tv_id):
     text = "📺 အပိုင်းရွေးချယ်ပါ:"
 
     if poster_url:
-        if query.message.photo:
+        try:
             await query.message.delete()
+        except:
+            pass
         await query.message.reply_photo(photo=poster_url, caption=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
     else:
-        if query.message.photo:
+        try:
             await query.message.delete()
-            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
-        else:
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+        except:
+            pass
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def handle_movie_request(query, movie_id):
     if not query.message.photo:
@@ -399,15 +401,17 @@ async def handle_movie_request(query, movie_id):
     text = f"🎬 **{movie_title}**\nအရည်အသွေး ရွေးချယ်ပါ:"
 
     if poster_url:
-        if query.message.photo:
+        try:
             await query.message.delete()
+        except:
+            pass
         await query.message.reply_photo(photo=poster_url, caption=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
     else:
-        if query.message.photo:
+        try:
             await query.message.delete()
-            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
-        else:
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+        except:
+            pass
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 
 async def handle_tv_request(query, tv_id, ep_idx):
@@ -452,15 +456,17 @@ async def handle_tv_request(query, tv_id, ep_idx):
     text = f"📺 **{tv_title} (Ep {ep_num})**\nအရည်အသွေး ရွေးချယ်ပါ:"
 
     if poster_url:
-        if query.message.photo:
+        try:
             await query.message.delete()
+        except:
+            pass
         await query.message.reply_photo(photo=poster_url, caption=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
     else:
-        if query.message.photo:
+        try:
             await query.message.delete()
-            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
-        else:
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+        except:
+            pass
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def process_tier_check_and_ad(query, user_id, cache_id):
     res = supabase.table("users").select("*").eq("id", user_id).execute()

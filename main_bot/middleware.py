@@ -10,6 +10,8 @@ from db import redis_client
 
 logger = logging.getLogger(__name__)
 
+import asyncio
+
 # Redis rate limit configurations
 RATE_LIMIT_ACTIONS = 10
 RATE_LIMIT_SECONDS = 60
@@ -21,20 +23,25 @@ async def is_rate_limited(user_id: int, action_type: str = "general") -> bool:
 
     if action_type == "start":
         key = f"rate_limit:start:{user_id}"
-        if redis_client.exists(key):
+        exists = await asyncio.to_thread(redis_client.exists, key)
+        if exists:
             return True
-        redis_client.setex(key, START_COMMAND_COOLDOWN, 1)
+        await asyncio.to_thread(redis_client.setex, key, START_COMMAND_COOLDOWN, 1)
         return False
     else:
         key = f"rate_limit:general:{user_id}"
-        current_count = redis_client.get(key)
+        current_count = await asyncio.to_thread(redis_client.get, key)
         if current_count and int(current_count) >= RATE_LIMIT_ACTIONS:
             return True
 
-        pipe = redis_client.pipeline()
-        pipe.incr(key)
-        pipe.expire(key, RATE_LIMIT_SECONDS)
-        pipe.execute()
+        def _redis_tx():
+            pipe = redis_client.pipeline()
+            pipe.incr(key)
+            # Only set expire on the first action to act as a proper bucket
+            if not current_count:
+                pipe.expire(key, RATE_LIMIT_SECONDS)
+            pipe.execute()
+        await asyncio.to_thread(_redis_tx)
         return False
 
 async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,7 +89,8 @@ async def force_join_middleware(update: Update, context: ContextTypes.DEFAULT_TY
     # Check rate limits
     if update.message and update.message.text and update.message.text.startswith('/start'):
         if await is_rate_limited(user_id, "start"):
-            raise Exception("RateLimitedStart")
+            from telegram.ext import DropUpdate
+            raise DropUpdate()
 
     # Check general rate limits
     if await is_rate_limited(user_id, "general"):
@@ -94,7 +102,8 @@ async def force_join_middleware(update: Update, context: ContextTypes.DEFAULT_TY
                 await update.callback_query.answer(warning_msg, show_alert=True)
             except:
                 await update.callback_query.message.reply_text(warning_msg)
-        raise Exception("RateLimitedGeneral")
+        from telegram.ext import DropUpdate
+        raise DropUpdate()
 
     if update.message and update.message.text and update.message.text.startswith('/'):
         return

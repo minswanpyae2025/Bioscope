@@ -16,7 +16,7 @@ CREATE TABLE users (
     last_activity_date DATE,
     joined_channels JSONB, -- Cached list of channels they have joined
     joined_check_cache TIMESTAMP WITH TIME ZONE, -- Last time joined check was performed
-    last_watched_video_id INT REFERENCES videos(id) ON DELETE SET NULL, -- Track last watched for recommendations
+    last_watched_video_id INT, -- Track last watched for recommendations
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -141,6 +141,8 @@ CREATE TABLE admin_config (
     key TEXT PRIMARY KEY,
     value JSONB -- Use JSONB for flexible values (ints, strings, arrays)
 );
+
+ALTER TABLE users ADD CONSTRAINT fk_last_watched_video FOREIGN KEY (last_watched_video_id) REFERENCES videos(id) ON DELETE SET NULL;
 
 -- Insert default admin config
 INSERT INTO admin_config (key, value) VALUES
