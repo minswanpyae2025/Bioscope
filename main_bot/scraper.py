@@ -98,6 +98,14 @@ class BioscopeInteractiveScraper:
     def get_movie_details(self, movie_id): return self._get(f"v2/movies/{movie_id}", "movie_detail")
     def get_tv_show_details(self, tv_id): return self._get(f"v2/tv-shows/{tv_id}", "tv_detail")
 
+    def get_you_may_also_like(self, movie_id):
+        # We need a key. Let's reuse 'movies' since it might work, or extract it if necessary
+        # The user provided: s_key=sXogP95OuXosrgT7cSD8dedDjpNN%2BZg5uvuqxLC5jm7pY2qxQNU6CZ3BLxVxVFlLHyvPw3Vv5GSE9%2BgEqdbzh8Nhx%2BM5kDRGsVHzlMtP7UXs%2BICJDkf9eRIhNnoeO5qGyKvzV5Hy1YOK7FYhaaFvXiYKEtuzgKsdWqXvNzN%2FP4c%3D
+        custom_key = "sXogP95OuXosrgT7cSD8dedDjpNN%2BZg5uvuqxLC5jm7pY2qxQNU6CZ3BLxVxVFlLHyvPw3Vv5GSE9%2BgEqdbzh8Nhx%2BM5kDRGsVHzlMtP7UXs%2BICJDkf9eRIhNnoeO5qGyKvzV5Hy1YOK7FYhaaFvXiYKEtuzgKsdWqXvNzN%2FP4c%3D"
+        url = f"{self.base_url}/you-may-also-like/movies/{movie_id}?device_os=android&device_name=API_Client&device_id={self.device_id}&uuid={self.device_id}&s_key={custom_key}&is_adult=0"
+        try: return requests.get(url, headers=self.base_headers).json()
+        except: return {}
+
     # --- NEW MULTI-STEP EXTRACTION FOR BOT ---
 
     def get_movie_streams(self, movie_id):

@@ -6,8 +6,36 @@ import logging
 from datetime import datetime
 import pytz
 from dateutil.parser import parse
+from db import redis_client
 
 logger = logging.getLogger(__name__)
+
+# Redis rate limit configurations
+RATE_LIMIT_ACTIONS = 10
+RATE_LIMIT_SECONDS = 60
+START_COMMAND_COOLDOWN = 10
+
+async def is_rate_limited(user_id: int, action_type: str = "general") -> bool:
+    if not redis_client:
+        return False
+
+    if action_type == "start":
+        key = f"rate_limit:start:{user_id}"
+        if redis_client.exists(key):
+            return True
+        redis_client.setex(key, START_COMMAND_COOLDOWN, 1)
+        return False
+    else:
+        key = f"rate_limit:general:{user_id}"
+        current_count = redis_client.get(key)
+        if current_count and int(current_count) >= RATE_LIMIT_ACTIONS:
+            return True
+
+        pipe = redis_client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, RATE_LIMIT_SECONDS)
+        pipe.execute()
+        return False
 
 async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -48,8 +76,29 @@ async def check_force_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def force_join_middleware(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user: return
+
+    user_id = update.effective_user.id
+
+    # Check rate limits
+    if update.message and update.message.text and update.message.text.startswith('/start'):
+        if await is_rate_limited(user_id, "start"):
+            raise Exception("RateLimitedStart")
+
+    # Check general rate limits
+    if await is_rate_limited(user_id, "general"):
+        warning_msg = "⚠️ သင်ဟာ အသုံးပြုမှုမြန်ဆန်နေပါတယ်။ ခဏစောင့်ပြီးမှ ထပ်မံကြိုးစားပါ။"
+        if update.message:
+            await update.message.reply_text(warning_msg)
+        elif update.callback_query:
+            try:
+                await update.callback_query.answer(warning_msg, show_alert=True)
+            except:
+                await update.callback_query.message.reply_text(warning_msg)
+        raise Exception("RateLimitedGeneral")
+
     if update.message and update.message.text and update.message.text.startswith('/'):
         return
+
     if update.callback_query and update.callback_query.data == "check_joined":
         pass
     else:

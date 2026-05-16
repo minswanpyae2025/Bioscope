@@ -640,6 +640,26 @@ class TaskListener(TaskConfig):
             if self.mid in task_dict:
                 del task_dict[self.mid]
             count = len(task_dict)
+
+        # Push error to redis
+        try:
+            import os, redis, json
+            redis_url = os.environ.get("REDIS_URL")
+            if redis_url:
+                r = redis.from_url(redis_url, decode_responses=True)
+                data_str = r.get(f"active_leech_{self.message.message_id}")
+                if data_str:
+                    data = json.loads(data_str)
+                    payload = {
+                        "event": "upload_failed",
+                        "internal_video_id": data["internal_video_id"],
+                        "req_id": data["req_id"],
+                        "error_msg": str(error)
+                    }
+                    r.publish("wzmlx_events", json.dumps(payload))
+        except Exception:
+            pass
+
         await send_message(self.message, f"{self.tag} {escape(str(error))}")
         if count == 0:
             await self.clean()

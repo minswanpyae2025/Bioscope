@@ -165,12 +165,15 @@ async def send_file(message, file, caption="", buttons=None):
                     data_str = r.get(f"active_leech_{msg_id}")
                     if data_str:
                         data = json.loads(data_str)
-                        sb.table("videos").update({
+                        # Push to redis instead of updating supabase directly
+                        payload = {
+                            "event": "upload_complete",
+                            "internal_video_id": data["internal_video_id"],
+                            "req_id": data["req_id"],
                             "telegram_file_id": file_id,
-                            "dump_message_id": dump_msg_id,
-                            "is_alive": True
-                        }).eq("id", data["internal_video_id"]).execute()
-                        sb.table("user_requests").update({"status": "uploaded"}).eq("id", data["req_id"]).execute()
+                            "dump_message_id": dump_msg_id
+                        }
+                        r.publish("wzmlx_events", json.dumps(payload))
                 file_id = "Unknown"
                 if hasattr(msg, "document") and msg.document:
                     file_id = msg.document.file_id
