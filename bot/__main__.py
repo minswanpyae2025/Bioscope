@@ -138,4 +138,7 @@ TgClient.bot.add_handler(
 )
 
 LOGGER.info("WZ Client(s) & Services Started !")
+from bot.redis_worker import init_worker
+init_worker()
+
 bot_loop.run_forever()

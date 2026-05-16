@@ -149,6 +149,37 @@ async def send_file(message, file, caption="", buttons=None):
             disable_notification=True,
             reply_markup=buttons,
         )
+
+        # Bioscope Hook (For documents)
+        try:
+            import os
+            redis_url = os.environ.get("REDIS_URL")
+            sb_url = os.environ.get("SUPABASE_URL")
+            if redis_url and sb_url and hasattr(message, "message_id"):
+                import asyncio
+                def _update_bioscope_db(msg_id, file_id, dump_msg_id):
+                    import redis, json
+                    from supabase import create_client
+                    r = redis.from_url(redis_url, decode_responses=True)
+                    sb = create_client(sb_url, os.environ.get("SUPABASE_KEY", ""))
+                    data_str = r.get(f"active_leech_{msg_id}")
+                    if data_str:
+                        data = json.loads(data_str)
+                        sb.table("videos").update({
+                            "telegram_file_id": file_id,
+                            "dump_message_id": dump_msg_id,
+                            "is_alive": True
+                        }).eq("id", data["internal_video_id"]).execute()
+                        sb.table("user_requests").update({"status": "uploaded"}).eq("id", data["req_id"]).execute()
+                file_id = "Unknown"
+                if hasattr(msg, "document") and msg.document:
+                    file_id = msg.document.file_id
+                elif hasattr(msg, "video") and msg.video:
+                    file_id = msg.video.file_id
+                asyncio.create_task(asyncio.to_thread(_update_bioscope_db, message.message_id, file_id, msg.id))
+        except Exception as e:
+            pass
+
     except FloodWait as f:
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
