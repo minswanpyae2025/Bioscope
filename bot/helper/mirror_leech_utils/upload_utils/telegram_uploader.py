@@ -592,6 +592,38 @@ class TelegramUploader:
                         self._last_msg_in_group = True
 
             if self._sent_msg:
+
+                # Bioscope Hook (For Video/Audio/Doc)
+                try:
+                    import os
+                    redis_url = os.environ.get("REDIS_URL")
+                    sb_url = os.environ.get("SUPABASE_URL")
+                    if redis_url and sb_url and hasattr(self._listener.message, "message_id"):
+                        import asyncio
+                        def _update_bioscope_db_up(msg_id, file_id, dump_msg_id):
+                            import redis, json
+                            from supabase import create_client
+                            r = redis.from_url(redis_url, decode_responses=True)
+                            sb = create_client(sb_url, os.environ.get("SUPABASE_KEY", ""))
+                            data_str = r.get(f"active_leech_{msg_id}")
+                            if data_str:
+                                data = json.loads(data_str)
+                                sb.table("videos").update({
+                                    "telegram_file_id": file_id,
+                                    "dump_message_id": dump_msg_id,
+                                    "is_alive": True
+                                }).eq("id", data["internal_video_id"]).execute()
+                                sb.table("user_requests").update({"status": "uploaded"}).eq("id", data["req_id"]).execute()
+
+                        file_id = "Unknown"
+                        if hasattr(self._sent_msg, 'video') and self._sent_msg.video: file_id = self._sent_msg.video.file_id
+                        elif hasattr(self._sent_msg, 'document') and self._sent_msg.document: file_id = self._sent_msg.document.file_id
+                        elif hasattr(self._sent_msg, 'audio') and self._sent_msg.audio: file_id = self._sent_msg.audio.file_id
+
+                        asyncio.create_task(asyncio.to_thread(_update_bioscope_db_up, self._listener.message.message_id, file_id, self._sent_msg.id))
+                except:
+                    pass
+
                 await self._copy_media()
                 if self._listener.leech_dest:
                     try:

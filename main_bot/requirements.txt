@@ -1,0 +1,7 @@
+supabase
+redis
+python-telegram-bot[job-queue]
+requests
+cryptography
+pytz
+python-dateutil
