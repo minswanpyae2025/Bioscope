@@ -64,15 +64,22 @@ async def update_user_activity_and_streak(user):
     supabase.table("users").update(updates).eq("id", user["id"]).execute()
 
 def get_main_menu_keyboard():
+    from telegram import WebAppInfo
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 ရုပ်ရှင်အသစ်များ", callback_data="movies")],
-        [InlineKeyboardButton("📺 ဇာတ်လမ်းတွဲအသစ်များ", callback_data="tvshows")],
+        [InlineKeyboardButton("🎬 ရုပ်ရှင်အသစ်များ", callback_data="movies_0")],
+        [InlineKeyboardButton("📺 ဇာတ်လမ်းတွဲအသစ်များ", callback_data="tvshows_0")],
         [InlineKeyboardButton("🔍 ရုပ်ရှင်ရှာရန်", callback_data="search_movies")],
         [InlineKeyboardButton("🔎 ဇာတ်လမ်းတွဲရှာရန်", callback_data="search_tv")],
+        [InlineKeyboardButton("📋 Watchlist", callback_data="watchlist")],
+        [InlineKeyboardButton("▶️ Continue Watching", callback_data="continue_watching")],
         [InlineKeyboardButton("⭐ သင့်အတွက်", callback_data="for_you")],
         [InlineKeyboardButton("🔥 ယနေ့လူကြိုက်အများဆုံး", callback_data="top_24h")],
+        [InlineKeyboardButton("📱 Mini App", web_app=WebAppInfo(url="https://bioscopetelegram.onrender.com/app/miniapp"))],
         [InlineKeyboardButton("👤 ပရိုဖိုင်", callback_data="profile")],
     ])
+
+def dummy_replace():
+    pass
 
 async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_info = await context.bot.get_me()
@@ -110,8 +117,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("မဝင်ရသေးပါ", show_alert=True)
         return
 
-    if data == "movies": await show_movies_list(query)
-    elif data == "tvshows": await show_tvshows_list(query)
+    if data.startswith("movies_"): await show_movies_list(query, int(data.split("_")[1]))
+    elif data.startswith("tvshows_"): await show_tvshows_list(query, int(data.split("_")[1]))
+    elif data == "watchlist": await show_watchlist(query, update.effective_user.id)
+    elif data == "continue_watching": await show_continue_watching(query, update.effective_user.id)
+    elif data.startswith("add_watchlist_"): await add_to_watchlist(query, update.effective_user.id, data)
+    elif data.startswith("review_"): await handle_review(query, update.effective_user.id, data)
     elif data == "main_menu": await query.edit_message_text("🎬 *Bioscope Bot Menu*:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
     elif data == "search_movies":
         context.user_data['search_type'] = 'movie'
@@ -122,6 +133,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "profile": await show_profile(query, update.effective_user.id)
     elif data == "for_you": await query.edit_message_text("သင်ဟာဒါကို ကြည့်ဖူးလို့ ဒါကိုလဲ ကြည့်ကြည့်ပါလား\n(မကြာမီလာမည်)")
     elif data == "top_24h": await show_top_24h(query)
+    elif data == "buy_premium": await handle_buy_premium(query, update.effective_user.id)
     elif data.startswith("movie_"): await handle_movie_request(query, data.split("_")[1])
     elif data.startswith("tvshow_"): await show_episodes(query, data.split("_")[1])
     elif data.startswith("episode_"): await handle_tv_request(query, data.split("_")[1], int(data.split("_")[2]))
@@ -137,23 +149,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         await process_video_request(query, uid, payload)
 
-async def show_movies_list(query):
-    res = await asyncio.to_thread(scraper.browse_movies)
+async def show_movies_list(query, offset=0):
+    res = await asyncio.to_thread(scraper.browse_movies, offset)
     movies = res.get("data", [])[:30]
-    if not movies:
+    if not movies and offset == 0:
         await query.edit_message_text("❌ မတွေ့ရှိပါ။")
         return
     buttons = [[InlineKeyboardButton(m.get("title", "Unknown"), callback_data=f"movie_{m['id']}")] for m in movies]
+
+    nav_buttons = []
+    if offset >= 30:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"movies_{offset-30}"))
+    if len(movies) == 30:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"movies_{offset+30}"))
+    if nav_buttons: buttons.append(nav_buttons)
+
     buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
     await query.edit_message_text("🎬 *ရုပ်ရှင်အသစ်များ* (ရွေးချယ်ပါ):", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
-async def show_tvshows_list(query):
-    res = await asyncio.to_thread(scraper.browse_tv_shows)
+async def show_tvshows_list(query, offset=0):
+    res = await asyncio.to_thread(scraper.browse_tv_shows, offset)
     shows = res.get("data", [])[:30]
-    if not shows:
+    if not shows and offset == 0:
         await query.edit_message_text("❌ မတွေ့ရှိပါ။")
         return
     buttons = [[InlineKeyboardButton(s.get("title", "Unknown"), callback_data=f"tvshow_{s['id']}")] for s in shows]
+
+    nav_buttons = []
+    if offset >= 30:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"tvshows_{offset-30}"))
+    if len(shows) == 30:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"tvshows_{offset+30}"))
+    if nav_buttons: buttons.append(nav_buttons)
+
     buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
     await query.edit_message_text("📺 *ဇာတ်လမ်းတွဲအသစ်များ* (ရွေးချယ်ပါ):", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
@@ -179,7 +207,7 @@ async def show_episodes(query, tv_id):
         await query.edit_message_text("❌ မတွေ့ရှိပါ။")
         return
     buttons = [[InlineKeyboardButton(f"Episode {ep.get('episode_number', '?')} – {ep.get('title', 'Unknown')}", callback_data=f"episode_{tv_id}_{idx}")] for idx, ep in enumerate(episodes)]
-    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="tvshows")])
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="tvshows_0")])
     await query.edit_message_text("📺 အပိုင်းရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def handle_movie_request(query, movie_id):
@@ -204,7 +232,8 @@ async def handle_movie_request(query, movie_id):
         STREAM_CACHE[cache_id] = {"stream": s, "post_id": movie_id, "is_movie": True, "title": full_title}
 
         buttons.append([InlineKeyboardButton(f"🎬 {res} | {size} (Option {idx+1})", callback_data=f"sel_{cache_id}")])
-    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="movies")])
+    buttons.append([InlineKeyboardButton("📋 Save to Watchlist", callback_data=f"add_watchlist_movie_{movie_id}")])
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="movies_0")])
     await query.edit_message_text(f"🎬 **{movie_title}**\nအရည်အသွေး ရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def handle_tv_request(query, tv_id, ep_idx):
@@ -239,6 +268,7 @@ async def handle_tv_request(query, tv_id, ep_idx):
         STREAM_CACHE[cache_id] = {"stream": s, "post_id": target_ep_id, "is_movie": False, "tv_id": tv_id, "title": full_title}
 
         buttons.append([InlineKeyboardButton(f"📺 {res} | {size} (Option {idx+1})", callback_data=f"sel_{cache_id}")])
+    buttons.append([InlineKeyboardButton("📋 Save to Watchlist", callback_data=f"add_watchlist_tv_{tv_id}")])
     buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data=f"tvshow_{tv_id}")])
     await query.edit_message_text(f"📺 **{tv_title} (Ep {ep_num})**\nအရည်အသွေး ရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
@@ -342,7 +372,38 @@ async def process_video_request(query, user_id, cache_id):
     url = await asyncio.to_thread(scraper.extract_stream_url, target_stream, post_id, is_movie)
 
     if not url:
-        await query.edit_message_text("❌ Error getting stream.")
+        # Auto-Resolution Fallback
+        res_list = ['1080p', '720p', '480p', '360p']
+        if resolution in res_list:
+            res_list.remove(resolution)
+
+        streams = []
+        if is_movie:
+            streams = await asyncio.to_thread(scraper.get_movie_streams, post_id)
+        else:
+            streams = await asyncio.to_thread(scraper.get_tv_streams, post_id)
+
+        fallback_stream = None
+        for r in res_list:
+            for s in streams:
+                if s.get('resolution') == r:
+                    fallback_stream = s
+                    break
+            if fallback_stream: break
+
+        if fallback_stream:
+            new_res = fallback_stream.get('resolution')
+            new_cache_id = str(uuid.uuid4())[:8]
+            STREAM_CACHE[new_cache_id] = {"stream": fallback_stream, "post_id": post_id, "is_movie": is_movie, "title": data.get('title', 'Bioscope Video')}
+
+            buttons = [
+                [InlineKeyboardButton(f"✅ Yes, give me {new_res}", callback_data=f"sel_{new_cache_id}")],
+                [InlineKeyboardButton("🔙 No, go back", callback_data="main_menu")]
+            ]
+            await query.edit_message_text(f"❌ {resolution} is dead.\nWould you like {new_res} instead?", reply_markup=InlineKeyboardMarkup(buttons))
+            return
+
+        await query.edit_message_text("❌ Error getting stream. All resolutions might be dead.")
         return
 
     internal_id = v_res.data[0]['id'] if v_res.data else None
@@ -357,7 +418,16 @@ async def process_video_request(query, user_id, cache_id):
         q_len = redis_client.llen("leech_queue")
         est_mins = 2 + (q_len * 2)
         payload = {"internal_video_id": internal_id, "url": url, "req_id": req_id}
-        redis_client.lpush("leech_queue", json.dumps(payload))
+
+        # Check tier for queue priority
+        res_user = supabase.table("users").select("tier").eq("id", user_id).execute()
+        tier = res_user.data[0]['tier'] if res_user.data else "free"
+
+        if tier == 'premium':
+            redis_client.lpush("vip_queue", json.dumps(payload))
+            est_mins = 0 # VIP gets instant
+        else:
+            redis_client.lpush("leech_queue", json.dumps(payload))
 
     await query.edit_message_text(f"📥 တန်းစီထားပါသည်။ ခန့်မှန်းစောင့်ဆိုင်းချိန်: ~{est_mins} မိနစ်")
 
@@ -385,7 +455,11 @@ async def show_profile(query, user_id):
     balance = tok_res.data[0]['balance'] if tok_res.data else 0
     txt = f"👤 *ပရိုဖိုင်*\nID: `{user['id']}`\nအမည်: {user['first_name']}\nအဆင့်: {user['tier'].upper()}\nဒီနေ့ကြည့်ပြီးသောအရေအတွက်: {user['daily_requests_used']}\nTokens: {balance}\nဆက်တိုက်ဝင်ရောက်မှု: {user['streak_days']} days\n"
     if user['premium_expires_at']: txt += f"Premium Exp: {user['premium_expires_at']}\n"
-    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]), parse_mode="Markdown")
+    buttons = []
+    if user['tier'] != 'premium':
+        buttons.append([InlineKeyboardButton("💎 Buy Premium (100 Tokens)", callback_data="buy_premium")])
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
+    await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 def main():
     token = os.environ.get("BOT_TOKEN")
@@ -400,6 +474,7 @@ def main():
     app.add_handler(CommandHandler("add_ad", add_ad))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_webapp_data))
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
@@ -408,3 +483,126 @@ if __name__ == "__main__":
     t = threading.Thread(target=start_background_monitors, daemon=True)
     t.start()
     main()
+
+async def handle_buy_premium(query, user_id):
+    res = supabase.table("users").select("*").eq("id", user_id).execute()
+    if not res.data: return
+    user = res.data[0]
+    if user['tier'] == 'premium':
+        await query.answer("You are already premium!", show_alert=True)
+        return
+    tok_res = supabase.table("tokens").select("balance").eq("user_id", user_id).execute()
+    balance = tok_res.data[0]['balance'] if tok_res.data else 0
+    if balance < 100:
+        await query.answer("Not enough tokens! You need 100.", show_alert=True)
+        return
+
+    # Deduct 100 tokens, grant premium
+    supabase.table("tokens").update({"balance": balance - 100}).eq("user_id", user_id).execute()
+    new_expires = datetime.now(TZ) + timedelta(days=30)
+    supabase.table("users").update({"tier": "premium", "premium_expires_at": new_expires.isoformat()}).eq("id", user_id).execute()
+
+    # Referral kickback
+    inv_res = supabase.table("invites").select("inviter_id").eq("invitee_id", user_id).execute()
+    if inv_res.data:
+        inviter_id = inv_res.data[0]['inviter_id']
+        inviter_tok_res = supabase.table("tokens").select("balance").eq("user_id", inviter_id).execute()
+        inviter_bal = inviter_tok_res.data[0]['balance'] if inviter_tok_res.data else 0
+        supabase.table("tokens").upsert({"user_id": inviter_id, "balance": inviter_bal + 10}).execute()
+        try:
+            await query.bot.send_message(chat_id=inviter_id, text=f"🎉 သင်ဖိတ်ခေါ်ထားသောသူတစ်ဦး Premium ဝယ်ယူလိုက်သောကြောင့် သင့်အား 10 Tokens ဆုချီးမြှင့်လိုက်ပါသည်။")
+        except: pass
+
+    await query.answer("Success! You are now Premium.", show_alert=True)
+    await show_profile(query, user_id)
+
+async def show_watchlist(query, user_id):
+    res = supabase.table("watchlists").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(20).execute()
+    if not res.data:
+        await query.edit_message_text("❌ Watchlist တွင် မရှိသေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        return
+    buttons = []
+    for item in res.data:
+        cb = f"movie_{item['post_id']}" if item['is_movie'] else f"tvshow_{item['post_id']}"
+        buttons.append([InlineKeyboardButton(item['title'], callback_data=cb)])
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
+    await query.edit_message_text("📋 *Watchlist*:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
+async def show_continue_watching(query, user_id):
+    res = supabase.table("user_requests").select("*, videos(*)").eq("user_id", user_id).in_("status", ["uploaded", "completed"]).order("requested_at", desc=True).limit(10).execute()
+    if not res.data:
+        await query.edit_message_text("❌ မှတ်တမ်း မရှိသေးပါ။", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        return
+    buttons = []
+    seen = set()
+    for req in res.data:
+        vid = req.get("videos")
+        if not vid: continue
+        title = vid.get('title', 'Unknown')
+        post_id = vid.get('post_id')
+        if post_id in seen: continue
+        seen.add(post_id)
+        cb = f"movie_{post_id}" if vid['type'] == 'movie' else f"tvshow_{post_id}"
+        buttons.append([InlineKeyboardButton(title, callback_data=cb)])
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
+    await query.edit_message_text("▶️ *Continue Watching*:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
+async def add_to_watchlist(query, user_id, data):
+    parts = data.split("_")
+    v_type = parts[2]
+    post_id = parts[3]
+    is_movie = (v_type == "movie")
+
+    # We need the title
+    title = f"Item {post_id}"
+    if is_movie:
+        movie_details = await asyncio.to_thread(scraper.get_movie_details, post_id)
+        title = movie_details.get("data", {}).get("title", title)
+    else:
+        tv_details = await asyncio.to_thread(scraper.get_tv_show_details, post_id)
+        title = tv_details.get("data", {}).get("title", title)
+
+    try:
+        supabase.table("watchlists").insert({
+            "user_id": user_id,
+            "post_id": post_id,
+            "is_movie": is_movie,
+            "title": title
+        }).execute()
+        await query.answer("✅ Watchlist သို့ ထည့်သွင်းပြီးပါပြီ။", show_alert=True)
+    except Exception as e:
+        await query.answer("Watchlist တွင် ရှိပြီးသားဖြစ်ပါသည်။", show_alert=True)
+
+
+async def handle_webapp_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.effective_message.web_app_data.data
+    # Convert it to a mock query object so we can use existing handlers
+    class MockQuery:
+        def __init__(self, data, message, bot):
+            self.data = data
+            self.message = message
+            self.bot = bot
+        async def edit_message_text(self, *args, **kwargs):
+            return await self.message.reply_text(*args, **kwargs)
+        async def answer(self, *args, **kwargs):
+            pass
+
+    query = MockQuery(data, update.effective_message, context.bot)
+    if data.startswith("movie_"): await handle_movie_request(query, data.split("_")[1])
+    elif data.startswith("tvshow_"): await show_episodes(query, data.split("_")[1])
+
+async def handle_review(query, user_id, data):
+    parts = data.split("_")
+    rating = parts[1] # 'like' or 'dislike'
+    video_id = int(parts[2])
+
+    try:
+        supabase.table("user_reviews").upsert({
+            "user_id": user_id,
+            "video_id": video_id,
+            "rating": rating
+        }, on_conflict="user_id,video_id").execute()
+        await query.answer("ကျေးဇူးတင်ပါသည်။", show_alert=True)
+        await query.message.edit_reply_markup(reply_markup=None)
+    except:
+        pass

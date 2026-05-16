@@ -1,3 +1,31 @@
+
+async def listen_redis_webhooks():
+    import redis.asyncio as redis
+    import json
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url: return
+    r = redis.from_url(redis_url, decode_responses=True)
+    pubsub = r.pubsub()
+    await pubsub.subscribe("supabase_updates")
+    logger.info("Listening to Redis Pub/Sub for supabase_updates...")
+    async for message in pubsub.listen():
+        if message["type"] == "message":
+            try:
+                data = json.loads(message["data"])
+                if data.get("type") == "video_uploaded":
+                    internal_video_id = data["internal_video_id"]
+                    req_id = data["req_id"]
+                    file_id = data["file_id"]
+                    dump_msg_id = data["dump_msg_id"]
+                    supabase.table("videos").update({
+                        "telegram_file_id": file_id,
+                        "dump_message_id": dump_msg_id,
+                        "is_alive": True
+                    }).eq("id", internal_video_id).execute()
+                    supabase.table("user_requests").update({"status": "uploaded"}).eq("id", req_id).execute()
+            except Exception as e:
+                logger.error(f"Error processing webhook: {e}")
+
 import os
 import asyncio
 from telegram import Bot
@@ -19,7 +47,7 @@ async def check_dead_links():
         try:
             msg_id = video["dump_message_id"]
             if not msg_id: continue
-            await bot.forward_message(chat_id=trash_id, from_chat_id=dump_id, message_id=msg_id)
+            await bot.copy_message(chat_id=trash_id, from_chat_id=dump_id, message_id=msg_id, protect_content=True)
             supabase.table("videos").update({"last_checked": "now()"}).eq("id", video["id"]).execute()
         except Exception:
             logger.warning(f"Video {video['id']} is dead. Attempting auto-heal...")
@@ -94,6 +122,12 @@ async def monitor_completed_requests():
                     try:
                         title = vid.get("title", "Bioscope Video")
                         await bot.copy_message(chat_id=user_id, from_chat_id=dump_id, message_id=vid["dump_message_id"], caption=f"**{title}**\n\n@BioscopeBot", parse_mode="Markdown", protect_content=True)
+                        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                        buttons = [
+                            [InlineKeyboardButton("👍 Like", callback_data=f"review_like_{vid['id']}"),
+                             InlineKeyboardButton("👎 Dislike", callback_data=f"review_dislike_{vid['id']}")]
+                        ]
+                        await bot.send_message(chat_id=user_id, text="How was this video?", reply_markup=InlineKeyboardMarkup(buttons))
                         supabase.table("user_requests").update({"status": "completed"}).eq("id", req["id"]).execute()
                     except Exception as e:
                         logger.error(f"Could not send video to user {user_id}: {e}")
@@ -102,7 +136,7 @@ async def monitor_completed_requests():
         await asyncio.sleep(10)
 
 def start_background_monitors():
-    from cron import check_dead_links, monitor_completed_requests
+    from cron import check_dead_links, monitor_completed_requests, listen_redis_webhooks
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -113,4 +147,5 @@ def start_background_monitors():
 
     loop.create_task(run_cron())
     loop.create_task(monitor_completed_requests())
+    loop.create_task(listen_redis_webhooks())
     loop.run_forever()

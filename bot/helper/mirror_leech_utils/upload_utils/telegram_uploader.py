@@ -602,18 +602,18 @@ class TelegramUploader:
                         import asyncio
                         def _update_bioscope_db_up(msg_id, file_id, dump_msg_id):
                             import redis, json
-                            from supabase import create_client
                             r = redis.from_url(redis_url, decode_responses=True)
-                            sb = create_client(sb_url, os.environ.get("SUPABASE_KEY", ""))
                             data_str = r.get(f"active_leech_{msg_id}")
                             if data_str:
                                 data = json.loads(data_str)
-                                sb.table("videos").update({
-                                    "telegram_file_id": file_id,
-                                    "dump_message_id": dump_msg_id,
-                                    "is_alive": True
-                                }).eq("id", data["internal_video_id"]).execute()
-                                sb.table("user_requests").update({"status": "uploaded"}).eq("id", data["req_id"]).execute()
+                                payload = {
+                                    "type": "video_uploaded",
+                                    "internal_video_id": data["internal_video_id"],
+                                    "req_id": data["req_id"],
+                                    "file_id": file_id,
+                                    "dump_msg_id": dump_msg_id
+                                }
+                                r.publish("supabase_updates", json.dumps(payload))
 
                         file_id = "Unknown"
                         if hasattr(self._sent_msg, 'video') and self._sent_msg.video: file_id = self._sent_msg.video.file_id
