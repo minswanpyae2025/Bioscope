@@ -184,6 +184,11 @@ async def show_episodes(query, tv_id):
 
 async def handle_movie_request(query, movie_id):
     await query.edit_message_text("🔄 စစ်ဆေးနေပါသည်...")
+
+    # We need the movie details to get the title
+    movie_details = await asyncio.to_thread(scraper.get_movie_details, movie_id)
+    movie_title = movie_details.get("data", {}).get("title", f"Movie {movie_id}")
+
     streams = await asyncio.to_thread(scraper.get_movie_streams, movie_id)
     if not streams:
         await query.edit_message_text("❌ မတွေ့ရှိပါ။")
@@ -193,18 +198,32 @@ async def handle_movie_request(query, movie_id):
         res = s.get('resolution', 'Unknown')
         size = s.get('size', 'Unknown')
         cache_id = str(uuid.uuid4())[:8]
-        STREAM_CACHE[cache_id] = {"stream": s, "post_id": movie_id, "is_movie": True}
+
+        # Store title in cache
+        full_title = f"🎬 {movie_title} ({res})"
+        STREAM_CACHE[cache_id] = {"stream": s, "post_id": movie_id, "is_movie": True, "title": full_title}
+
         buttons.append([InlineKeyboardButton(f"🎬 {res} | {size} (Option {idx+1})", callback_data=f"sel_{cache_id}")])
     buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="movies")])
-    await query.edit_message_text("🎬 **ရုပ်ရှင်အရည်အသွေး ရွေးချယ်ပါ:**", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    await query.edit_message_text(f"🎬 **{movie_title}**\nအရည်အသွေး ရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def handle_tv_request(query, tv_id, ep_idx):
     await query.edit_message_text("🔄 စစ်ဆေးနေပါသည်...")
+
+    # We need the show title
+    tv_details = await asyncio.to_thread(scraper.get_tv_show_details, tv_id)
+    tv_title = tv_details.get("data", {}).get("title", f"TV Show {tv_id}")
+
     episodes = await asyncio.to_thread(scraper.get_tv_episodes, tv_id)
     if not episodes or ep_idx >= len(episodes):
         await query.edit_message_text("❌ မတွေ့ရှိပါ။")
         return
-    target_ep_id = episodes[ep_idx].get("id")
+
+    target_ep = episodes[ep_idx]
+    target_ep_id = target_ep.get("id")
+    ep_num = target_ep.get("episode_number", "?")
+    ep_name = target_ep.get("title", "")
+
     streams = await asyncio.to_thread(scraper.get_tv_streams, target_ep_id)
     if not streams:
         await query.edit_message_text("❌ မတွေ့ရှိပါ။")
@@ -214,10 +233,14 @@ async def handle_tv_request(query, tv_id, ep_idx):
         res = s.get('resolution', 'Unknown')
         size = s.get('size', 'Unknown')
         cache_id = str(uuid.uuid4())[:8]
-        STREAM_CACHE[cache_id] = {"stream": s, "post_id": target_ep_id, "is_movie": False, "tv_id": tv_id}
+
+        # Store title in cache
+        full_title = f"📺 {tv_title} - Episode {ep_num} {ep_name} ({res})"
+        STREAM_CACHE[cache_id] = {"stream": s, "post_id": target_ep_id, "is_movie": False, "tv_id": tv_id, "title": full_title}
+
         buttons.append([InlineKeyboardButton(f"📺 {res} | {size} (Option {idx+1})", callback_data=f"sel_{cache_id}")])
     buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data=f"tvshow_{tv_id}")])
-    await query.edit_message_text("📺 **အရည်အသွေး ရွေးချယ်ပါ:**", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    await query.edit_message_text(f"📺 **{tv_title} (Ep {ep_num})**\nအရည်အသွေး ရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def process_tier_check_and_ad(query, user_id, cache_id):
     res = supabase.table("users").select("*").eq("id", user_id).execute()
@@ -293,16 +316,20 @@ async def process_video_request(query, user_id, cache_id):
     used = res.data[0]['daily_requests_used'] + 1
     supabase.table("users").update({"daily_requests_used": used}).eq("id", user_id).execute()
 
-    source_id = f"{post_id}_{target_stream.get('id')}"
+    post_id = str(s_data["post_id"])
+    is_movie = s_data["is_movie"]
+    display_title = s_data.get("title", "Bioscope Video")
+    resolution = target_stream.get('resolution', 'Unknown')
     v_type = "movie" if is_movie else "tv_episode"
 
-    v_res = supabase.table("videos").select("*").eq("source_id", source_id).eq("type", v_type).execute()
+    v_res = supabase.table("videos").select("*").eq("post_id", post_id).eq("type", v_type).eq("resolution", resolution).execute()
 
     if v_res.data and v_res.data[0].get("is_alive") and v_res.data[0].get("telegram_file_id"):
         dump_channel = get_admin_config("dump_channel_id")
         msg_id = v_res.data[0]["dump_message_id"]
+        saved_title = v_res.data[0].get("title", display_title)
         try:
-            await query.bot.copy_message(chat_id=user_id, from_chat_id=dump_channel, message_id=msg_id)
+            await query.bot.copy_message(chat_id=user_id, from_chat_id=dump_channel, message_id=msg_id, caption=f"**{saved_title}**\n\n@BioscopeBot", parse_mode="Markdown", protect_content=True)
             await query.edit_message_text("✅ ပို့ဆောင်ပြီးပါပြီ။")
             await asyncio.sleep(3)
             await query.message.delete()
@@ -320,17 +347,19 @@ async def process_video_request(query, user_id, cache_id):
 
     internal_id = v_res.data[0]['id'] if v_res.data else None
     if not internal_id:
-        ins = supabase.table("videos").insert({"source_id": source_id, "type": v_type}).execute()
+        ins = supabase.table("videos").insert({"post_id": post_id, "type": v_type, "resolution": resolution, "title": display_title}).execute()
         internal_id = ins.data[0]['id']
 
     req_ins = supabase.table("user_requests").insert({"user_id": user_id, "video_id": internal_id, "status": "queued"}).execute()
     req_id = req_ins.data[0]['id']
 
     if redis_client:
+        q_len = redis_client.llen("leech_queue")
+        est_mins = 2 + (q_len * 2)
         payload = {"internal_video_id": internal_id, "url": url, "req_id": req_id}
         redis_client.lpush("leech_queue", json.dumps(payload))
 
-    await query.edit_message_text("📥 တန်းစီထားပါသည်။ ခေတ္တစောင့်ဆိုင်းပေးပါ။")
+    await query.edit_message_text(f"📥 တန်းစီထားပါသည်။ ခန့်မှန်းစောင့်ဆိုင်းချိန်: ~{est_mins} မိနစ်")
 
 async def show_top_24h(query):
     yesterday = (datetime.now(TZ) - timedelta(days=1)).isoformat()
