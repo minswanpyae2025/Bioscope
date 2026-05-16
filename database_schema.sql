@@ -132,3 +132,24 @@ INSERT INTO admin_config (key, value) VALUES
 ('ad_watch_required', 'true'),
 ('default_ad_id', 'null'),
 ('streak_reward_premium_hours', '24');
+
+-- 11. Watchlists
+CREATE TABLE watchlists (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    post_id TEXT,
+    is_movie BOOLEAN,
+    title TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, post_id, is_movie)
+);
+
+-- 12. User Reviews
+CREATE TABLE user_reviews (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    video_id INT REFERENCES videos(id) ON DELETE CASCADE,
+    rating TEXT, -- 'like' or 'dislike'
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, video_id)
+);

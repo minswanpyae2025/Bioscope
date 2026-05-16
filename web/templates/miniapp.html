@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bioscope Mini App</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: var(--tg-theme-bg-color, #ffffff);
+            color: var(--tg-theme-text-color, #000000);
+            padding: 10px;
+        }
+        h2 { text-align: center; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+            gap: 10px;
+        }
+        .item {
+            text-align: center;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 5px;
+            background-color: var(--tg-theme-secondary-bg-color, #f0f0f0);
+        }
+        .item img {
+            width: 100%;
+            border-radius: 5px;
+        }
+        .item p {
+            margin: 5px 0 0 0;
+            font-size: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    </style>
+</head>
+<body>
+    <h2>Featured Movies</h2>
+    <div class="grid" id="grid">
+        <!-- Static examples since we can't easily fetch the actual api without cors or backend proxy from html -->
+        <div class="item" onclick="sendData('movie_21703')">
+            <img src="https://image.tmdb.org/t/p/w200/A4j8S6moJS2zNtRR8oWF08gRnL5.jpg" alt="Movie">
+            <p>Five Nights at Freddy's</p>
+        </div>
+        <div class="item" onclick="sendData('movie_12345')">
+            <img src="https://image.tmdb.org/t/p/w200/kDp1vUBnMpe8ak4rjgl3cLELqjU.jpg" alt="Movie">
+            <p>Kung Fu Panda 4</p>
+        </div>
+        <div class="item" onclick="sendData('tvshow_9876')">
+            <img src="https://image.tmdb.org/t/p/w200/8tWNQGgAGRAXgQx25hNstFkY2X0.jpg" alt="TV Show">
+            <p>Fallout</p>
+        </div>
+    </div>
+
+    <script>
+        window.Telegram.WebApp.ready();
+
+        function sendData(payload) {
+            window.Telegram.WebApp.sendData(payload);
+        }
+    </script>
+</body>
+</html>

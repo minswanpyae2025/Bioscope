@@ -254,6 +254,10 @@ async def set_aria2(gid, selected_files):
         LOGGER.info(f"Verification Failed! Report! Gid: {gid}")
 
 
+@app.get("/app/miniapp", response_class=HTMLResponse)
+async def miniapp(request: Request):
+    return templates.TemplateResponse(request, "miniapp.html")
+
 @app.get("/", response_class=HTMLResponse)
 async def homepage(request: Request):
     return templates.TemplateResponse(request, "landing.html")

@@ -50,7 +50,7 @@ async def process_queue():
     logger.info("Starting Redis Worker to listen for 'leech_queue'...")
     while True:
         try:
-            item = await asyncio.to_thread(redis_client.blpop, "leech_queue", timeout=0)
+            item = await asyncio.to_thread(redis_client.blpop, ["vip_queue", "leech_queue"], timeout=0)
             if item:
                 data = json.loads(item[1])
                 url = data.get("url")
