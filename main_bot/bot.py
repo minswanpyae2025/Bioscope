@@ -52,6 +52,19 @@ async def update_user_activity_and_streak(user):
                 updates["streak_days"] = 0
                 updates["premium_expires_at"] = new_expires.isoformat()
                 updates["tier"] = "premium"
+
+                # MLM Referral: Check if user was invited, give inviter a 10% kickback token if they buy/earn premium
+                invite_res = supabase.table("invites").select("*").eq("invitee_id", user["id"]).eq("reward_given", False).execute()
+                if invite_res.data:
+                    inviter_id = invite_res.data[0]["inviter_id"]
+                    invite_id = invite_res.data[0]["id"]
+                    # Assume 10 tokens as a base "premium" cost equivalent to reward inviter with 10% (1 token)
+                    # or simply 10 tokens. Let's give 5 tokens for simplicity upon getting premium
+                    tok_res = supabase.table("tokens").select("balance").eq("user_id", inviter_id).execute()
+                    balance = tok_res.data[0]['balance'] if tok_res.data else 0
+                    supabase.table("tokens").upsert({"user_id": inviter_id, "balance": balance + 5}).execute()
+                    supabase.table("invites").update({"reward_given": True}).eq("id", invite_id).execute()
+
             else:
                 updates["streak_days"] = streak
         elif last_act_date < now - timedelta(days=1):
@@ -65,12 +78,13 @@ async def update_user_activity_and_streak(user):
 
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 ရုပ်ရှင်အသစ်များ", callback_data="movies")],
-        [InlineKeyboardButton("📺 ဇာတ်လမ်းတွဲအသစ်များ", callback_data="tvshows")],
+        [InlineKeyboardButton("🎬 ရုပ်ရှင်အသစ်များ", callback_data="movies_0")],
+        [InlineKeyboardButton("📺 ဇာတ်လမ်းတွဲအသစ်များ", callback_data="tvshows_0")],
         [InlineKeyboardButton("🔍 ရုပ်ရှင်ရှာရန်", callback_data="search_movies")],
         [InlineKeyboardButton("🔎 ဇာတ်လမ်းတွဲရှာရန်", callback_data="search_tv")],
         [InlineKeyboardButton("⭐ သင့်အတွက်", callback_data="for_you")],
         [InlineKeyboardButton("🔥 ယနေ့လူကြိုက်အများဆုံး", callback_data="top_24h")],
+        [InlineKeyboardButton("🔖 ဆက်လက်ကြည့်ရှုရန် (Watchlist)", callback_data="watchlist_0")],
         [InlineKeyboardButton("👤 ပရိုဖိုင်", callback_data="profile")],
     ])
 
@@ -80,19 +94,20 @@ async def invite_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🎁 သူငယ်ချင်းများကို ဖိတ်ခေါ်ပြီး Token ရယူပါ:\n`{link}`", parse_mode="Markdown")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    db_user = await get_or_create_user(user.id, user.username, user.first_name)
+    if db_user: await update_user_activity_and_streak(db_user)
+
     if context.args and context.args[0].startswith("ref_"):
         inviter_id = int(context.args[0].split("_")[1])
         if inviter_id != update.effective_user.id:
             try:
+                # Add invite record, if unique violation occurs, it means already invited
                 supabase.table("invites").insert({"inviter_id": inviter_id, "invitee_id": update.effective_user.id}).execute()
                 tok_res = supabase.table("tokens").select("balance").eq("user_id", inviter_id).execute()
                 balance = tok_res.data[0]['balance'] if tok_res.data else 0
                 supabase.table("tokens").upsert({"user_id": inviter_id, "balance": balance + 5}).execute()
             except: pass
-
-    user = update.effective_user
-    db_user = await get_or_create_user(user.id, user.username, user.first_name)
-    if db_user: await update_user_activity_and_streak(db_user)
 
     await update.message.reply_text("🎬 *Bioscope Bot မှ ကြိုဆိုပါတယ်*\nအောက်ပါ Menu မှ ရွေးချယ်ပါ:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
 
@@ -105,14 +120,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from middleware import check_force_join
         passed = await check_force_join(update, context)
         if passed:
-            await query.edit_message_text("🎬 *Bioscope Bot Menu*:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
+            if query.message.photo:
+                await query.message.delete()
+                await query.message.reply_text("🎬 *Bioscope Bot Menu*:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
+            else:
+                await query.edit_message_text("🎬 *Bioscope Bot Menu*:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
         else:
             await query.answer("မဝင်ရသေးပါ", show_alert=True)
         return
 
-    if data == "movies": await show_movies_list(query)
-    elif data == "tvshows": await show_tvshows_list(query)
-    elif data == "main_menu": await query.edit_message_text("🎬 *Bioscope Bot Menu*:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
+    if data.startswith("movies_"): await show_movies_list(query, int(data.split("_")[1]))
+    elif data.startswith("tvshows_"): await show_tvshows_list(query, int(data.split("_")[1]))
+    elif data.startswith("watchlist_"): await show_watchlist(query, update.effective_user.id, int(data.split("_")[1]))
+    elif data == "main_menu":
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text("🎬 *Bioscope Bot Menu*:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
+        else:
+            await query.edit_message_text("🎬 *Bioscope Bot Menu*:", reply_markup=get_main_menu_keyboard(), parse_mode="Markdown")
     elif data == "search_movies":
         context.user_data['search_type'] = 'movie'
         await query.edit_message_text("🔍 ရှာဖွေလိုသော ရုပ်ရှင်အမည်ကို ရိုက်ထည့်ပါ:")
@@ -120,12 +145,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['search_type'] = 'tv'
         await query.edit_message_text("🔎 ရှာဖွေလိုသော ဇာတ်လမ်းတွဲအမည်ကို ရိုက်ထည့်ပါ:")
     elif data == "profile": await show_profile(query, update.effective_user.id)
-    elif data == "for_you": await query.edit_message_text("သင်ဟာဒါကို ကြည့်ဖူးလို့ ဒါကိုလဲ ကြည့်ကြည့်ပါလား\n(မကြာမီလာမည်)")
+    elif data == "for_you": await handle_for_you(query, update.effective_user.id)
     elif data == "top_24h": await show_top_24h(query)
     elif data.startswith("movie_"): await handle_movie_request(query, data.split("_")[1])
     elif data.startswith("tvshow_"): await show_episodes(query, data.split("_")[1])
     elif data.startswith("episode_"): await handle_tv_request(query, data.split("_")[1], int(data.split("_")[2]))
+    elif data.startswith("addwatch_"): await handle_add_watchlist(query, update.effective_user.id, data.split("_")[1], data.split("_")[2])
     elif data.startswith("sel_"): await process_tier_check_and_ad(query, update.effective_user.id, data.split("_")[1])
+    elif data.startswith("rate_"): await handle_user_rating(query, update.effective_user.id, data.split("_")[1], data.split("_")[2], data.split("_")[3])
     elif data.startswith("ad_watched_"):
         parts = data.split("_")
         reward_tokens = int(parts[-2])
@@ -137,25 +164,129 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         await process_video_request(query, uid, payload)
 
-async def show_movies_list(query):
-    res = await asyncio.to_thread(scraper.browse_movies)
-    movies = res.get("data", [])[:30]
+async def handle_user_rating(query, user_id, rating, video_type, video_post_id):
+    try:
+        supabase.table("user_ratings").upsert({
+            "user_id": user_id,
+            "video_post_id": video_post_id,
+            "video_type": video_type,
+            "rating": rating
+        }, on_conflict="user_id, video_post_id, video_type").execute()
+
+        await query.answer("ကျေးဇူးတင်ပါတယ်။", show_alert=True)
+        # Remove the inline keyboard after rating
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception as e:
+        await query.answer("❌ အမှားအယွင်းဖြစ်ပွားခဲ့သည်။", show_alert=True)
+
+async def handle_for_you(query, user_id):
+    # Get last watched video id
+    res = supabase.table("users").select("last_watched_video_id, videos(*)").eq("id", user_id).execute()
+    if not res.data or not res.data[0].get('last_watched_video_id') or not res.data[0].get('videos'):
+        text = "❌ သင်ကြည့်ရှုခဲ့သော မှတ်တမ်းမရှိသေးပါ။"
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        else:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        return
+
+    last_vid = res.data[0]['videos']
+    if last_vid['type'] != 'movie':
+        text = "❌ ဇာတ်လမ်းတွဲများအတွက် အကြံပြုချက်မရရှိနိုင်သေးပါ။ ရုပ်ရှင်ကြည့်ပြီးမှ ထပ်မံကြိုးစားပါ။"
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        else:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        return
+
+    post_id = last_vid['post_id']
+    await query.answer("🔄 စစ်ဆေးနေပါသည်...", show_alert=False)
+
+    recommendations = await asyncio.to_thread(scraper.get_you_may_also_like, post_id)
+    rec_data = recommendations.get("data", [])
+
+    if not rec_data:
+        text = "❌ အကြံပြုစရာ မရှိသေးပါ။"
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        else:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        return
+
+    # Take first 5 recommendations
+    top_recs = rec_data[:5]
+    buttons = [[InlineKeyboardButton(m.get("title", "Unknown"), callback_data=f"movie_{m['id']}")] for m in top_recs]
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
+
+    text = "⭐ *သင်ဟာ ဒါကိုကြည့်ဖူးလို့ ဒါကိုလဲ ကြည့်ကြည့်ပါလား*\n\nရွေးချယ်ပါ:"
+    if query.message.photo:
+        await query.message.delete()
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
+async def show_movies_list(query, offset):
+    res = await asyncio.to_thread(scraper.browse_movies, offset)
+    movies = res.get("data", [])
     if not movies:
-        await query.edit_message_text("❌ မတွေ့ရှိပါ။")
+        await query.answer("❌ နောက်ထပ်မရှိတော့ပါ။", show_alert=True)
         return
     buttons = [[InlineKeyboardButton(m.get("title", "Unknown"), callback_data=f"movie_{m['id']}")] for m in movies]
-    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
-    await query.edit_message_text("🎬 *ရုပ်ရှင်အသစ်များ* (ရွေးချယ်ပါ):", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
-async def show_tvshows_list(query):
-    res = await asyncio.to_thread(scraper.browse_tv_shows)
-    shows = res.get("data", [])[:30]
+    nav_buttons = []
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"movies_{max(0, offset-30)}"))
+    if len(movies) >= 30:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"movies_{offset+30}"))
+    if nav_buttons:
+        buttons.append(nav_buttons)
+
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
+    text = "🎬 *ရုပ်ရှင်အသစ်များ* (ရွေးချယ်ပါ):"
+
+    if query.message.photo:
+        await query.message.delete()
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
+async def show_tvshows_list(query, offset):
+    res = await asyncio.to_thread(scraper.browse_tv_shows, offset)
+    shows = res.get("data", [])
     if not shows:
-        await query.edit_message_text("❌ မတွေ့ရှိပါ။")
+        await query.answer("❌ နောက်ထပ်မရှိတော့ပါ။", show_alert=True)
         return
     buttons = [[InlineKeyboardButton(s.get("title", "Unknown"), callback_data=f"tvshow_{s['id']}")] for s in shows]
+
+    nav_buttons = []
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"tvshows_{max(0, offset-30)}"))
+    if len(shows) >= 30:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"tvshows_{offset+30}"))
+    if nav_buttons:
+        buttons.append(nav_buttons)
+
     buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
-    await query.edit_message_text("📺 *ဇာတ်လမ်းတွဲအသစ်များ* (ရွေးချယ်ပါ):", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    text = "📺 *ဇာတ်လမ်းတွဲအသစ်များ* (ရွေးချယ်ပါ):"
+
+    if query.message.photo:
+        await query.message.delete()
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
+async def handle_add_watchlist(query, user_id, video_type, video_post_id):
+    try:
+        supabase.table("watchlist").insert({"user_id": user_id, "video_post_id": video_post_id, "video_type": video_type}).execute()
+        await query.answer("✅ Watchlist တွင် သိမ်းဆည်းပြီးပါပြီ။", show_alert=True)
+    except Exception as e:
+        if 'duplicate' in str(e).lower() or 'unique' in str(e).lower():
+            await query.answer("ℹ️ သင့် Watchlist တွင် ရှိပြီးသားဖြစ်ပါသည်။", show_alert=True)
+        else:
+            await query.answer("❌ Error adding to watchlist.", show_alert=True)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stype = context.user_data.get('search_type')
@@ -173,25 +304,82 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
         await update.message.reply_text("📺 *ရှာဖွေမှုရလဒ်များ*:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
+async def show_watchlist(query, user_id, offset):
+    res = supabase.table("watchlist").select("*").eq("user_id", user_id).order("added_at", desc=True).range(offset, offset+29).execute()
+    items = res.data
+    if not items:
+        if offset == 0:
+            msg = "❌ သင့် Watchlist တွင် ဘာမှမရှိသေးပါ။"
+            if query.message.photo:
+                await query.message.delete()
+                await query.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+            else:
+                await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]))
+        else:
+            await query.answer("❌ နောက်ထပ်မရှိတော့ပါ။", show_alert=True)
+        return
+
+    buttons = []
+    for item in items:
+        title_prefix = "🎬" if item['video_type'] == 'movie' else "📺"
+        callback = f"movie_{item['video_post_id']}" if item['video_type'] == 'movie' else f"tvshow_{item['video_post_id']}"
+        buttons.append([InlineKeyboardButton(f"{title_prefix} {item['video_post_id']}", callback_data=callback)])
+
+    nav_buttons = []
+    if offset > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"watchlist_{max(0, offset-30)}"))
+    if len(items) >= 30:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"watchlist_{offset+30}"))
+    if nav_buttons:
+        buttons.append(nav_buttons)
+
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")])
+
+    text = "🔖 *Watchlist*:"
+    if query.message.photo:
+        await query.message.delete()
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    else:
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
 async def show_episodes(query, tv_id):
     episodes = await asyncio.to_thread(scraper.get_tv_episodes, tv_id)
     if not episodes:
-        await query.edit_message_text("❌ မတွေ့ရှိပါ။")
+        await query.answer("❌ မတွေ့ရှိပါ။", show_alert=True)
         return
+
+    tv_details = await asyncio.to_thread(scraper.get_tv_show_details, tv_id)
+    poster_url = tv_details.get("data", {}).get("poster")
+
     buttons = [[InlineKeyboardButton(f"Episode {ep.get('episode_number', '?')} – {ep.get('title', 'Unknown')}", callback_data=f"episode_{tv_id}_{idx}")] for idx, ep in enumerate(episodes)]
-    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="tvshows")])
-    await query.edit_message_text("📺 အပိုင်းရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    buttons.append([InlineKeyboardButton("🔖 Save to Watchlist", callback_data=f"addwatch_tv_{tv_id}")])
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="tvshows_0")])
+
+    text = "📺 အပိုင်းရွေးချယ်ပါ:"
+
+    if poster_url:
+        if query.message.photo:
+            await query.message.delete()
+        await query.message.reply_photo(photo=poster_url, caption=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    else:
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+        else:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def handle_movie_request(query, movie_id):
-    await query.edit_message_text("🔄 စစ်ဆေးနေပါသည်...")
+    if not query.message.photo:
+        await query.edit_message_text("🔄 စစ်ဆေးနေပါသည်...")
 
     # We need the movie details to get the title
     movie_details = await asyncio.to_thread(scraper.get_movie_details, movie_id)
     movie_title = movie_details.get("data", {}).get("title", f"Movie {movie_id}")
+    poster_url = movie_details.get("data", {}).get("poster")
 
     streams = await asyncio.to_thread(scraper.get_movie_streams, movie_id)
     if not streams:
-        await query.edit_message_text("❌ မတွေ့ရှိပါ။")
+        await query.answer("❌ မတွေ့ရှိပါ။", show_alert=True)
         return
     buttons = []
     for idx, s in enumerate(streams):
@@ -203,20 +391,40 @@ async def handle_movie_request(query, movie_id):
         full_title = f"🎬 {movie_title} ({res})"
         STREAM_CACHE[cache_id] = {"stream": s, "post_id": movie_id, "is_movie": True, "title": full_title}
 
-        buttons.append([InlineKeyboardButton(f"🎬 {res} | {size} (Option {idx+1})", callback_data=f"sel_{cache_id}")])
-    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="movies")])
-    await query.edit_message_text(f"🎬 **{movie_title}**\nအရည်အသွေး ရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+        buttons.append([InlineKeyboardButton(f"🎬 {res} | 📦 {size}", callback_data=f"sel_{cache_id}")])
+
+    buttons.append([InlineKeyboardButton("🔖 Save to Watchlist", callback_data=f"addwatch_movie_{movie_id}")])
+    buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data="movies_0")])
+
+    text = f"🎬 **{movie_title}**\nအရည်အသွေး ရွေးချယ်ပါ:"
+
+    if poster_url:
+        if query.message.photo:
+            await query.message.delete()
+        await query.message.reply_photo(photo=poster_url, caption=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    else:
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+        else:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
 
 async def handle_tv_request(query, tv_id, ep_idx):
-    await query.edit_message_text("🔄 စစ်ဆေးနေပါသည်...")
+    if not query.message.photo:
+        await query.edit_message_text("🔄 စစ်ဆေးနေပါသည်...")
 
     # We need the show title
     tv_details = await asyncio.to_thread(scraper.get_tv_show_details, tv_id)
     tv_title = tv_details.get("data", {}).get("title", f"TV Show {tv_id}")
 
+    tv_details = await asyncio.to_thread(scraper.get_tv_show_details, tv_id)
+    tv_title = tv_details.get("data", {}).get("title", f"TV Show {tv_id}")
+    poster_url = tv_details.get("data", {}).get("poster")
+
     episodes = await asyncio.to_thread(scraper.get_tv_episodes, tv_id)
     if not episodes or ep_idx >= len(episodes):
-        await query.edit_message_text("❌ မတွေ့ရှိပါ။")
+        await query.answer("❌ မတွေ့ရှိပါ။", show_alert=True)
         return
 
     target_ep = episodes[ep_idx]
@@ -226,7 +434,7 @@ async def handle_tv_request(query, tv_id, ep_idx):
 
     streams = await asyncio.to_thread(scraper.get_tv_streams, target_ep_id)
     if not streams:
-        await query.edit_message_text("❌ မတွေ့ရှိပါ။")
+        await query.answer("❌ မတွေ့ရှိပါ။", show_alert=True)
         return
     buttons = []
     for idx, s in enumerate(streams):
@@ -238,9 +446,21 @@ async def handle_tv_request(query, tv_id, ep_idx):
         full_title = f"📺 {tv_title} - Episode {ep_num} {ep_name} ({res})"
         STREAM_CACHE[cache_id] = {"stream": s, "post_id": target_ep_id, "is_movie": False, "tv_id": tv_id, "title": full_title}
 
-        buttons.append([InlineKeyboardButton(f"📺 {res} | {size} (Option {idx+1})", callback_data=f"sel_{cache_id}")])
+        buttons.append([InlineKeyboardButton(f"📺 {res} | 📦 {size}", callback_data=f"sel_{cache_id}")])
+
     buttons.append([InlineKeyboardButton("🔙 နောက်သို့", callback_data=f"tvshow_{tv_id}")])
-    await query.edit_message_text(f"📺 **{tv_title} (Ep {ep_num})**\nအရည်အသွေး ရွေးချယ်ပါ:", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    text = f"📺 **{tv_title} (Ep {ep_num})**\nအရည်အသွေး ရွေးချယ်ပါ:"
+
+    if poster_url:
+        if query.message.photo:
+            await query.message.delete()
+        await query.message.reply_photo(photo=poster_url, caption=text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    else:
+        if query.message.photo:
+            await query.message.delete()
+            await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+        else:
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
 async def process_tier_check_and_ad(query, user_id, cache_id):
     res = supabase.table("users").select("*").eq("id", user_id).execute()
@@ -256,7 +476,7 @@ async def process_tier_check_and_ad(query, user_id, cache_id):
     limit = int(get_admin_config(f"{user['tier']}_daily_limit", 5 if not is_premium else 50))
 
     if user['daily_requests_used'] >= limit:
-         await query.edit_message_text("❌ ယနေ့အတွက် သတ်မှတ်ထားသော အရေအတွက် ပြည့်သွားပါပြီ။")
+         await query.answer("❌ ယနေ့အတွက် သတ်မှတ်ထားသော အရေအတွက် ပြည့်သွားပါပြီ။", show_alert=True)
          return
 
     if is_premium:
@@ -324,21 +544,41 @@ async def process_video_request(query, user_id, cache_id):
 
     v_res = supabase.table("videos").select("*").eq("post_id", post_id).eq("type", v_type).eq("resolution", resolution).execute()
 
+    # Update last watched
+    internal_id = v_res.data[0]['id'] if v_res.data else None
+    if not internal_id:
+        ins = supabase.table("videos").insert({"post_id": post_id, "type": v_type, "resolution": resolution, "title": display_title}).execute()
+        internal_id = ins.data[0]['id']
+
+    supabase.table("users").update({"last_watched_video_id": internal_id}).eq("id", user_id).execute()
+
     if v_res.data and v_res.data[0].get("is_alive") and v_res.data[0].get("telegram_file_id"):
         dump_channel = get_admin_config("dump_channel_id")
         msg_id = v_res.data[0]["dump_message_id"]
         saved_title = v_res.data[0].get("title", display_title)
         try:
-            await query.bot.copy_message(chat_id=user_id, from_chat_id=dump_channel, message_id=msg_id, caption=f"**{saved_title}**\n\n@BioscopeBot", parse_mode="Markdown", protect_content=True)
-            await query.edit_message_text("✅ ပို့ဆောင်ပြီးပါပြီ။")
-            await asyncio.sleep(3)
-            await query.message.delete()
+            rating_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👍 Like", callback_data=f"rate_like_{v_type}_{post_id}"), InlineKeyboardButton("👎 Dislike", callback_data=f"rate_dislike_{v_type}_{post_id}")]
+            ])
+            await query.bot.copy_message(chat_id=user_id, from_chat_id=dump_channel, message_id=msg_id, caption=f"**{saved_title}**\n\n@BioscopeBot", parse_mode="Markdown", reply_markup=rating_kb, protect_content=True)
+
+            if query.message.photo:
+                await query.message.delete()
+            else:
+                await query.edit_message_text("✅ ပို့ဆောင်ပြီးပါပြီ။")
+                await asyncio.sleep(3)
+                await query.message.delete()
             return
         except Exception as e:
             logger.error(f"Copy message failed: {e}")
-            supabase.table("videos").update({"is_alive": False}).eq("id", v_res.data[0]["id"]).execute()
+            supabase.table("videos").update({"is_alive": False}).eq("id", internal_id).execute()
 
-    await query.edit_message_text("📥 ဒေါင်းလုဒ်စတင်နေပါပြီ...")
+    if query.message.photo:
+        await query.message.delete()
+        msg = await query.message.reply_text("📥 ဒေါင်းလုဒ်စတင်နေပါပြီ...")
+    else:
+        msg = query.message
+        await query.edit_message_text("📥 ဒေါင်းလုဒ်စတင်နေပါပြီ...")
     url = await asyncio.to_thread(scraper.extract_stream_url, target_stream, post_id, is_movie)
 
     if not url:
@@ -353,13 +593,20 @@ async def process_video_request(query, user_id, cache_id):
     req_ins = supabase.table("user_requests").insert({"user_id": user_id, "video_id": internal_id, "status": "queued"}).execute()
     req_id = req_ins.data[0]['id']
 
-    if redis_client:
-        q_len = redis_client.llen("leech_queue")
-        est_mins = 2 + (q_len * 2)
-        payload = {"internal_video_id": internal_id, "url": url, "req_id": req_id}
-        redis_client.lpush("leech_queue", json.dumps(payload))
+    res = supabase.table("users").select("tier").eq("id", user_id).execute()
+    tier = res.data[0]['tier'] if res.data else "free"
 
-    await query.edit_message_text(f"📥 တန်းစီထားပါသည်။ ခန့်မှန်းစောင့်ဆိုင်းချိန်: ~{est_mins} မိနစ်")
+    if redis_client:
+        queue_name = "vip_queue" if tier == "premium" else "leech_queue"
+        q_len = redis_client.llen(queue_name)
+        est_mins = 2 + (q_len * 2)
+        payload = {"internal_video_id": internal_id, "url": url, "req_id": req_id, "user_id": user_id, "tier": tier}
+        redis_client.lpush(queue_name, json.dumps(payload))
+
+    try:
+        await msg.edit_text(f"📥 တန်းစီထားပါသည်။ ခန့်မှန်းစောင့်ဆိုင်းချိန်: ~{est_mins} မိနစ်")
+    except:
+        pass
 
 async def show_top_24h(query):
     yesterday = (datetime.now(TZ) - timedelta(days=1)).isoformat()
@@ -387,24 +634,117 @@ async def show_profile(query, user_id):
     if user['premium_expires_at']: txt += f"Premium Exp: {user['premium_expires_at']}\n"
     await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 နောက်သို့", callback_data="main_menu")]]), parse_mode="Markdown")
 
-def main():
-    token = os.environ.get("BOT_TOKEN")
-    if not token: return
-    app = Application.builder().token(token).build()
-    app.add_handler(TypeHandler(Update, force_join_middleware), group=-1)
-    app.add_handler(CommandHandler("invite", invite_link))
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("set_dump_channel", set_dump_channel))
-    app.add_handler(CommandHandler("set_trash_channel", set_trash_channel))
-    app.add_handler(CommandHandler("set_required_channels", set_required_channels))
-    app.add_handler(CommandHandler("add_ad", add_ad))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+async def redis_event_listener(app):
+    if not redis_client:
+        return
+    pubsub = redis_client.pubsub()
+    pubsub.subscribe("wzmlx_events")
+    logger.info("Listening for wzmlx_events on Redis...")
+
+    while True:
+        try:
+            message = await asyncio.to_thread(pubsub.get_message, ignore_subscribe_messages=True, timeout=1.0)
+            if message:
+                data = json.loads(message['data'])
+                event = data.get("event")
+                internal_video_id = data.get("internal_video_id")
+                req_id = data.get("req_id")
+
+                if event == "upload_complete":
+                    file_id = data.get("telegram_file_id")
+                    dump_message_id = data.get("dump_message_id")
+
+                    supabase.table("videos").update({
+                        "telegram_file_id": file_id,
+                        "dump_message_id": dump_message_id,
+                        "is_alive": True
+                    }).eq("id", internal_video_id).execute()
+
+                    supabase.table("user_requests").update({"status": "uploaded"}).eq("id", req_id).execute()
+
+                    # Notify user if they were waiting?
+                    # The message is sent by the worker bot directly to the dump channel.
+                    # Actually, the user doesn't get it until they request again, or we forward it.
+                    # In process_video_request, we told them "queueing".
+                    # Let's forward it to the user now.
+                    req_res = supabase.table("user_requests").select("user_id").eq("id", req_id).execute()
+                    if req_res.data:
+                        user_id = req_res.data[0]['user_id']
+                        vid_res = supabase.table("videos").select("*").eq("id", internal_video_id).execute()
+                        if vid_res.data:
+                            dump_channel = get_admin_config("dump_channel_id")
+                            msg_id = vid_res.data[0]["dump_message_id"]
+                            v_type = vid_res.data[0]["type"]
+                            post_id = vid_res.data[0]["post_id"]
+                            saved_title = vid_res.data[0].get("title", "Bioscope Video")
+
+                            try:
+                                rating_kb = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("👍 Like", callback_data=f"rate_like_{v_type}_{post_id}"), InlineKeyboardButton("👎 Dislike", callback_data=f"rate_dislike_{v_type}_{post_id}")]
+                                ])
+                                await app.bot.copy_message(chat_id=user_id, from_chat_id=dump_channel, message_id=msg_id, caption=f"**{saved_title}**\n\n@BioscopeBot", parse_mode="Markdown", reply_markup=rating_kb, protect_content=True)
+                            except Exception as e:
+                                logger.error(f"Failed to copy message to user {user_id}: {e}")
+
+                elif event == "upload_failed":
+                    supabase.table("user_requests").update({"status": "failed"}).eq("id", req_id).execute()
+
+                    # Auto-Resolution Fallback
+                    req_res = supabase.table("user_requests").select("user_id").eq("id", req_id).execute()
+                    if req_res.data:
+                        user_id = req_res.data[0]['user_id']
+                        vid_res = supabase.table("videos").select("*").eq("id", internal_video_id).execute()
+                        if vid_res.data:
+                            v_type = vid_res.data[0]["type"]
+                            post_id = vid_res.data[0]["post_id"]
+                            failed_res = vid_res.data[0]["resolution"]
+                            fallback_res = "720p" if failed_res == "1080p" else "480p" if failed_res == "720p" else None
+
+                            try:
+                                if fallback_res:
+                                    # Create a dummy cache ID to restart the request loop
+                                    cache_id = str(uuid.uuid4())[:8]
+                                    # Re-fetch streams
+                                    is_movie = (v_type == "movie")
+                                    streams = await asyncio.to_thread(scraper.get_movie_streams if is_movie else scraper.get_tv_streams, post_id)
+                                    target_stream = next((s for s in streams if s.get('resolution') == fallback_res), None)
+
+                                    if target_stream:
+                                        STREAM_CACHE[cache_id] = {"stream": target_stream, "post_id": post_id, "is_movie": is_movie, "title": f"{vid_res.data[0]['title']} ({fallback_res})"}
+                                        buttons = [[InlineKeyboardButton(f"✅ ဟုတ်ကဲ့၊ {fallback_res} ကိုကြည့်ပါမည်", callback_data=f"sel_{cache_id}")]]
+                                        await app.bot.send_message(chat_id=user_id, text=f"❌ {failed_res} သည် ချို့ယွင်းနေပါသည်။ {fallback_res} ဖြင့် ကြည့်ရှုလိုပါသလား?", reply_markup=InlineKeyboardMarkup(buttons))
+                                    else:
+                                        await app.bot.send_message(chat_id=user_id, text=f"❌ {failed_res} သည် ချို့ယွင်းနေပါသည်။ တောင်းပန်ပါသည်။")
+                                else:
+                                    await app.bot.send_message(chat_id=user_id, text=f"❌ သင့်ဗီဒီယိုကို ရယူရာတွင် ချို့ယွင်းမှုဖြစ်ပေါ်ခဲ့ပါသည်။")
+                            except Exception as e:
+                                logger.error(f"Failed to notify user {user_id} of failure: {e}")
+
+        except Exception as e:
+            logger.error(f"Redis pub/sub error: {e}")
+            await asyncio.sleep(5)
+        await asyncio.sleep(0.1)
+
+async def post_init(app: Application):
+    asyncio.create_task(redis_event_listener(app))
 
 if __name__ == "__main__":
     from cron import start_background_monitors
     import threading
     t = threading.Thread(target=start_background_monitors, daemon=True)
     t.start()
-    main()
+
+    token = os.environ.get("BOT_TOKEN")
+    if token:
+        app = Application.builder().token(token).post_init(post_init).build()
+
+        app.add_handler(TypeHandler(Update, force_join_middleware), group=-1)
+        app.add_handler(CommandHandler("invite", invite_link))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("set_dump_channel", set_dump_channel))
+        app.add_handler(CommandHandler("set_trash_channel", set_trash_channel))
+        app.add_handler(CommandHandler("set_required_channels", set_required_channels))
+        app.add_handler(CommandHandler("add_ad", add_ad))
+        app.add_handler(CallbackQueryHandler(button_handler))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        app.run_polling(allowed_updates=Update.ALL_TYPES)

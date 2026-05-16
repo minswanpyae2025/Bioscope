@@ -47,12 +47,13 @@ async def process_queue():
         logger.info("Redis or Supabase not configured for Leecher Worker.")
         return
 
-    logger.info("Starting Redis Worker to listen for 'leech_queue'...")
+    logger.info("Starting Redis Worker to listen for queues...")
     while True:
         try:
-            item = await asyncio.to_thread(redis_client.blpop, "leech_queue", timeout=0)
+            item = await asyncio.to_thread(redis_client.blpop, ["vip_queue", "leech_queue"], timeout=0)
             if item:
-                data = json.loads(item[1])
+                queue_name, payload_str = item
+                data = json.loads(payload_str)
                 url = data.get("url")
                 internal_video_id = data.get("internal_video_id")
                 req_id = data.get("req_id")

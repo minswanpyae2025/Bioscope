@@ -16,6 +16,7 @@ CREATE TABLE users (
     last_activity_date DATE,
     joined_channels JSONB, -- Cached list of channels they have joined
     joined_check_cache TIMESTAMP WITH TIME ZONE, -- Last time joined check was performed
+    last_watched_video_id INT REFERENCES videos(id) ON DELETE SET NULL, -- Track last watched for recommendations
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -114,7 +115,28 @@ CREATE TABLE preferences (
     UNIQUE(user_id, genre_id, tag_id)
 );
 
--- 10. Admin Config
+-- 10. Watchlist
+CREATE TABLE watchlist (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    video_post_id TEXT NOT NULL, -- Keep track of post_id (Bioscope ID) directly for easier querying
+    video_type TEXT NOT NULL, -- 'movie' or 'tv_episode'
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, video_post_id, video_type)
+);
+
+-- 11. User Ratings
+CREATE TABLE user_ratings (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    video_post_id TEXT NOT NULL,
+    video_type TEXT NOT NULL,
+    rating TEXT CHECK (rating IN ('like', 'dislike')),
+    rated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_id, video_post_id, video_type)
+);
+
+-- 12. Admin Config
 CREATE TABLE admin_config (
     key TEXT PRIMARY KEY,
     value JSONB -- Use JSONB for flexible values (ints, strings, arrays)
